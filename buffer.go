@@ -55,8 +55,8 @@ func (r *RingBuffer) Offer(n *Node) BufferStatus {
 	return Failed
 }
 
-// Drains the buffer, sending each element to the consumer for processing. The caller must ensure
-// that a consumer has exclusive read access to the buffer.
+// Drains the buffer, sending each element to the consumer for processing.
+// The caller must ensure that a consumer has exclusive read access to the buffer.
 func (r *RingBuffer) DrainTo(consumer ElemConsumer) {
 	// read index
 	head := atomic.LoadUint32(&r.r)

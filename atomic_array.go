@@ -6,10 +6,6 @@ import (
 	"unsafe"
 )
 
-const (
-	PtrSize = 4 << (^uintptr(0) >> 63)
-)
-
 type atomicArray struct {
 	// The base address for real data array
 	base unsafe.Pointer

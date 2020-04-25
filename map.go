@@ -9,7 +9,7 @@ type ConcurrentMap interface {
 
 	Get(key interface{}) (value interface{}, existed bool)
 
-	Remove(key interface{})
+	Remove(key interface{}) (existed bool)
 
 	Contains(key interface{}) (ok bool)
 
@@ -17,19 +17,8 @@ type ConcurrentMap interface {
 }
 
 type SafeMap struct {
-	data      map[interface{}]interface{}
-	readChan  chan interface{}
-	writeChan chan interface{}
-	mux       *sync.RWMutex
-}
-
-type Node struct {
-	Key   interface{}
-	Value interface{}
-}
-
-func (s *SafeMap) afterAccess(n *Node) {
-	s.readChan <- n
+	data map[interface{}]interface{}
+	mux  *sync.RWMutex
 }
 
 func (s *SafeMap) Put(key interface{}, value interface{}) {
@@ -72,10 +61,14 @@ func (s *SafeMap) Get(key interface{}) (value interface{}, existed bool) {
 	return
 }
 
-func (s *SafeMap) Remove(key interface{}) {
+func (s *SafeMap) Remove(key interface{}) (existed bool) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	delete(s.data, key)
+	_, existed = s.data[key]
+	if existed {
+		delete(s.data, key)
+	}
+	return
 }
 
 func (s *SafeMap) Contains(key interface{}) (ok bool) {
