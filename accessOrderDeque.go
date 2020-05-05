@@ -45,8 +45,8 @@ func (q *AccessOrderDeque) PushFront(n *Node) {
 		// the deque is empty
 		q.tail = n
 	} else {
-		h.setPreviousInAccessOrder(n)
-		n.setNextInAccessOrder(h)
+		h.prev = n
+		n.next = h
 	}
 }
 
@@ -59,8 +59,8 @@ func (q *AccessOrderDeque) PushBack(n *Node) {
 	if t == nil {
 		q.head = n
 	} else {
-		t.setNextInAccessOrder(n)
-		n.setPreviousInAccessOrder(t)
+		t.next = n
+		n.prev = t
 	}
 }
 
@@ -79,31 +79,31 @@ func (q *AccessOrderDeque) GetBack() *Node {
 }
 
 func (q *AccessOrderDeque) GetPrevious(n *Node) *Node {
-	return n.getPreviousInAccessOrder()
+	return n.prev
 }
 
 func (q *AccessOrderDeque) GetNext(n *Node) *Node {
-	return n.getNextInAccessOrder()
+	return n.next
 }
 
 func (q *AccessOrderDeque) Remove(n *Node) bool {
 	if !q.Contains(n) {
 		return false
 	}
-	prev := n.getPreviousInAccessOrder()
-	next := n.getNextInAccessOrder()
+	prev := n.prev
+	next := n.next
 	if prev == nil {
 		q.head = n
 	} else {
-		prev.setNextInAccessOrder(next)
-		n.setPreviousInAccessOrder(nil)
+		prev.next = next
+		n.prev = nil
 	}
 
 	if next == nil {
 		q.tail = n
 	} else {
-		next.setPreviousInAccessOrder(prev)
-		n.setNextInAccessOrder(nil)
+		next.prev = prev
+		n.next = nil
 	}
 
 	return true
@@ -114,8 +114,8 @@ func (q *AccessOrderDeque) RemoveFront() *Node {
 		return nil
 	}
 	h := q.head
-	next := h.getNextInAccessOrder()
-	h.setNextInAccessOrder(nil)
+	next := h.next
+	h.next = nil
 	q.head = next
 
 	// only one node in deque
@@ -123,7 +123,7 @@ func (q *AccessOrderDeque) RemoveFront() *Node {
 		q.tail = nil
 	} else {
 		// multi node in deque
-		next.setPreviousInAccessOrder(nil)
+		next.prev = nil
 	}
 	return h
 }
@@ -133,14 +133,14 @@ func (q *AccessOrderDeque) RemoveBack() *Node {
 		return nil
 	}
 	t := q.tail
-	prev := t.getPreviousInAccessOrder()
-	t.setPreviousInAccessOrder(nil)
+	prev := t.prev
+	t.prev = nil
 	q.tail = prev
 
 	if prev == nil {
 		q.head = nil
 	} else {
-		prev.setNextInAccessOrder(nil)
+		prev.next = nil
 	}
 	return t
 }
@@ -169,9 +169,9 @@ func (q *AccessOrderDeque) MoveToBack(n *Node) {
 
 func (q *AccessOrderDeque) Clear() {
 	for cur := q.head; cur != nil; {
-		next := cur.getNextInAccessOrder()
-		cur.setPreviousInAccessOrder(nil)
-		cur.setNextInAccessOrder(nil)
+		next := cur.next
+		cur.prev = nil
+		cur.next = nil
 		cur = next
 	}
 	q.head = nil
@@ -181,7 +181,7 @@ func (q *AccessOrderDeque) Clear() {
 func (q *AccessOrderDeque) ToSlice() []*Node {
 	size := q.Size()
 	ret := make([]*Node, size, size)
-	for cur := q.head; cur != nil; cur = cur.getNextInAccessOrder() {
+	for cur := q.head; cur != nil; cur = cur.next {
 		ret = append(ret, cur)
 	}
 	return ret
@@ -192,12 +192,12 @@ func (q *AccessOrderDeque) IsEmpty() bool {
 }
 
 func (q *AccessOrderDeque) Contains(n *Node) bool {
-	return n.getPreviousInAccessOrder() != nil || n.getNextInAccessOrder() != nil || n == q.head
+	return n.prev != nil || n.next != nil || n == q.head
 }
 
 func (q *AccessOrderDeque) Size() int {
 	n := 0
-	for cur := q.head; cur != nil; cur = cur.getNextInAccessOrder() {
+	for cur := q.head; cur != nil; cur = cur.next {
 		n++
 	}
 	return n

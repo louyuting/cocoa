@@ -240,11 +240,11 @@ func (c *BoundedLocalCache) evictFromWindow() int {
 		if node == nil {
 			break
 		}
-		next := node.getNextInAccessOrder()
+		next := node.next
 		c.accessOrderWindowDeque().Remove(node)
 		c.accessOrderProbationDeque().PushBack(node)
 		candidates++
-		c.windowWeightedSize = c.windowWeightedSize - node.getWeight()
+		c.windowWeightedSize = c.windowWeightedSize - node.weight
 		node = next
 	}
 	return candidates
