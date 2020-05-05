@@ -43,7 +43,7 @@ func (f *FrequencySketch) ensureCapacity(maxSize int) {
 // frequency returns the estimated number of occurrences of an element, up to the maximum (15).
 func (f *FrequencySketch) frequency(key []byte) int {
 	// hash the key
-	hash := hash(key)
+	hash := uint64(hash(key))
 	// counter index in table[idx]
 	// start in [0,4,8,12]
 	start := int((hash & 3) << 2)
@@ -63,7 +63,7 @@ func (f *FrequencySketch) frequency(key []byte) int {
 // This process provides a frequency aging to allow expired long term entries to fade away.
 func (f *FrequencySketch) increment(key []byte) {
 	// hash the key
-	hash := hash(key)
+	hash := uint64(hash(key))
 	// counter index in table[idx]
 	// start in [0,4,8,12]
 	start := int((hash & 3) << 2)

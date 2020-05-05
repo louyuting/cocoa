@@ -10,28 +10,67 @@ type task interface {
 	run()
 }
 
+// AddTask is a async task used for add new kv to LocalCache
+// Support size-base eviction
 type AddTask struct {
+	c      *BoundedLocalCache
 	node   *Node
 	weight int
 }
 
 func (a *AddTask) run() {
-	panic("implement me")
+	c := a.c
+	if !c.EnableEvict() {
+		return
+	}
+	weightedSize := c.weightedSize
+	c.weightedSize = weightedSize + a.weight
+
+	node := a.node
+	if len(node.Key) != 0 {
+		c.sketch.increment(node.Key)
+	}
+	// insert to tail
+	c.accessOrderWindowDeque().PushBack(node)
 }
 
 type UpdateTask struct {
+	c          *BoundedLocalCache
 	node       *Node
 	weightDiff int
 }
 
-func (a *UpdateTask) run() {
-	panic("implement me")
+func (t *UpdateTask) run() {
+	c := t.c
+	if !c.EnableEvict() {
+		return
+	}
+	node := t.node
+	if node.inWindow() {
+		c.windowWeightedSize = c.windowWeightedSize + t.weightDiff
+	} else if node.inMainProtected() {
+		c.mainProtectedWeightedSize = c.mainProtectedWeightedSize + t.weightDiff
+	}
+	//nodePtr := unsafe.Pointer(￿node)
+	c.onAccess(nil)
 }
 
 type DeleteTask struct {
+	c    *BoundedLocalCache
 	node *Node
 }
 
 func (a *DeleteTask) run() {
-	panic("implement me")
+	c := a.c
+	if !c.EnableEvict() {
+		return
+	}
+	node := a.node
+	if node.inWindow() {
+		c.accessOrderWindowDeque().Remove(node)
+	} else if node.inMainProbation() {
+		c.accessOrderProbationDeque().Remove(node)
+	} else {
+		c.accessOrderProtectedDeque().Remove(node)
+	}
 }

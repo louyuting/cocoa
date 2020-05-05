@@ -1,6 +1,9 @@
 package cocoa
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"unsafe"
+)
 
 const (
 	BufferSize = 16
@@ -18,7 +21,7 @@ const (
 	Failed               = 2
 )
 
-type ElemConsumer func(*Node)
+type ElemConsumer func(p unsafe.Pointer)
 
 type RingBuffer struct {
 	buf *atomicArray
@@ -38,7 +41,7 @@ func NewRingBuffer() *RingBuffer {
 // Offer inserts the specified element into this buffer if it is possible to do so immediately without
 // violating capacity restrictions. The addition is allowed to fail spuriously if multiple
 // threads insert concurrently.
-func (r *RingBuffer) Offer(n *Node) BufferStatus {
+func (r *RingBuffer) Offer(n unsafe.Pointer) BufferStatus {
 	// read index
 	head := atomic.LoadUint32(&r.r)
 	// write index

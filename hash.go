@@ -54,10 +54,10 @@ func readUnaligned32(p unsafe.Pointer) uint32 {
 }
 
 //
-func hash(src []byte) uint64 {
+func hash(src []byte) int {
 	s := (*SliceHeader)(unsafe.Pointer(&src))
 	h := memhash(s.Data, 0, uintptr(s.Len))
-	return uint64(h)
+	return int(h)
 }
 
 func memhash(p unsafe.Pointer, seed, s uintptr) uintptr {
