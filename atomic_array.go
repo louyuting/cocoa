@@ -19,7 +19,7 @@ type atomicArray struct {
 func newAtomicArray(len int) *atomicArray {
 	ret := &atomicArray{
 		length: len,
-		data:   make([]unsafe.Pointer, len),
+		data:   make([]unsafe.Pointer, len, len),
 	}
 	// calculate base address for real data array
 	sliHeader := (*SliceHeader)(unsafe.Pointer(&ret.data))
@@ -50,4 +50,8 @@ func (a *atomicArray) compareAndSet(idx int, except, update unsafe.Pointer) bool
 	// then convert to (*unsafe.Pointer)
 	// update secondary pointer
 	return atomic.CompareAndSwapPointer((*unsafe.Pointer)(a.elementOffset(idx)), except, update)
+}
+
+func (a *atomicArray) len() int {
+	return a.length
 }

@@ -80,8 +80,8 @@ type BoundedLocalCache struct {
 	mainProtectedMaximum      int
 	mainProtectedWeightedSize int
 
-	readBuffer  *RingBuffer
-	writeBuffer *RingBuffer
+	readBuffer  *ringBuffer
+	writeBuffer *ringBuffer
 
 	evictable AtomicBool
 
@@ -199,11 +199,11 @@ func (c *BoundedLocalCache) maintenance() {
 }
 
 func (c *BoundedLocalCache) drainReadBuffer() {
-	c.readBuffer.DrainTo(c.onAccess)
+	c.readBuffer.drainTo(c.onAccess)
 }
 
 func (c *BoundedLocalCache) drainWriteBuffer() {
-	c.writeBuffer.DrainTo(c.onWrite)
+	c.writeBuffer.drainTo(c.onWrite)
 	c.drainStatus.set(ProcessingToRequired)
 }
 
@@ -382,8 +382,8 @@ func (c *BoundedLocalCache) accessOrderProtectedDeque() *AccessOrderDeque {
 }
 
 func (c *BoundedLocalCache) afterRead(node *Node) {
-	// Might lose some read record if readBuffer.Offer return Failed
-	delayable := c.readBuffer.Offer(unsafe.Pointer(node)) != Full
+	// Might lose some read record if readBuffer.offer return failed
+	delayable := c.readBuffer.offer(unsafe.Pointer(node)) != full
 	if c.shouldDrainBuffers(delayable) {
 		c.scheduleDrainBuffers()
 	}
@@ -391,7 +391,7 @@ func (c *BoundedLocalCache) afterRead(node *Node) {
 
 func (c *BoundedLocalCache) afterWrite(t task) {
 	for i := 0; i < WriteBufferRetries; i++ {
-		if c.writeBuffer.Offer(unsafe.Pointer(&t)) == Success {
+		if c.writeBuffer.offer(unsafe.Pointer(&t)) == success {
 			c.scheduleAfterWrite()
 			return
 		}

@@ -6,61 +6,61 @@ import (
 )
 
 const (
-	BufferSize = 16
-	// Assume 4-byte references and 64-byte cache line (16 elements per line)
-	SpaceSize = BufferSize << 4
-	SpaceMask = SpaceSize - 1
-	Offset    = 16
+	// The max number of element this buffer could store.
+	bufferSize = 16
+	// 256
+	spaceSize = bufferSize << 4
+	spaceMask = spaceSize - 1
+	offset    = 16
 )
 
-type BufferStatus uint8
+type bufferStatus uint8
 
 const (
-	Full    BufferStatus = iota
-	Success              = 1
-	Failed               = 2
+	full    bufferStatus = iota
+	success              = 1
+	failed               = 2
 )
 
-type ElemConsumer func(p unsafe.Pointer)
+type elemConsumer func(p unsafe.Pointer)
 
-type RingBuffer struct {
+type ringBuffer struct {
 	buf *atomicArray
 	r   uint32
 	w   uint32
 }
 
-func NewRingBuffer() *RingBuffer {
-	ret := &RingBuffer{
-		buf: newAtomicArray(SpaceSize),
+func newRingBuffer() *ringBuffer {
+	ret := &ringBuffer{
+		buf: newAtomicArray(spaceSize),
 		r:   0,
 		w:   0,
 	}
 	return ret
 }
 
-// Offer inserts the specified element into this buffer if it is possible to do so immediately without
-// violating capacity restrictions. The addition is allowed to fail spuriously if multiple
-// threads insert concurrently.
-func (r *RingBuffer) Offer(n unsafe.Pointer) BufferStatus {
+// offer inserts the pointer of specified element into this buffer if it is possible to do so immediately without
+// violating capacity restrictions. The addition is allowed to fail spuriously if multiple threads insert concurrently.
+func (r *ringBuffer) offer(n unsafe.Pointer) bufferStatus {
 	// read index
 	head := atomic.LoadUint32(&r.r)
 	// write index
 	tail := atomic.LoadUint32(&r.w)
 	size := tail - head
-	if size >= SpaceSize {
-		return Full
+	if size >= spaceSize {
+		return full
 	}
-	if atomic.CompareAndSwapUint32(&r.w, tail, tail+Offset) {
-		idx := int(tail & SpaceMask)
+	if atomic.CompareAndSwapUint32(&r.w, tail, tail+offset) {
+		idx := int(tail & spaceMask)
 		r.buf.set(idx, n)
-		return Success
+		return success
 	}
-	return Failed
+	return failed
 }
 
 // Drains the buffer, sending each element to the consumer for processing.
 // The caller must ensure that a consumer has exclusive read access to the buffer.
-func (r *RingBuffer) DrainTo(consumer ElemConsumer) {
+func (r *ringBuffer) drainTo(consumer elemConsumer) {
 	// read index
 	head := atomic.LoadUint32(&r.r)
 	// write index
@@ -71,7 +71,7 @@ func (r *RingBuffer) DrainTo(consumer ElemConsumer) {
 	}
 
 	for tail != head {
-		idx := int(head & SpaceMask)
+		idx := int(head & spaceMask)
 		e := r.buf.get(idx)
 		if e == nil {
 			// not published yet
@@ -79,7 +79,7 @@ func (r *RingBuffer) DrainTo(consumer ElemConsumer) {
 		}
 		r.buf.set(idx, nil)
 		consumer(e)
-		head += Offset
+		head += offset
 	}
 	atomic.StoreUint32(&r.r, head)
 }

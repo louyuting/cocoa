@@ -6,7 +6,7 @@ import (
 )
 
 func TestAccessOrderDeque(t *testing.T) {
-	t.Run("", func(t *testing.T) {
+	t.Run("TestAccessOrderDeque", func(t *testing.T) {
 		q := AccessOrderDeque{}
 		n1 := &Node{Value: 1}
 		n2 := &Node{Value: 2}
