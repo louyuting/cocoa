@@ -1,6 +1,6 @@
 package cocoa
 
-// The async task for:
+// task is the async task for:
 // 1. AddTask
 // 2. UpdateTask
 // 3. DeleteTask
@@ -8,6 +8,15 @@ package cocoa
 // This task will not change the cache entity, and only to update the page replacement policy.
 type task interface {
 	run()
+}
+
+type ReadTask struct {
+	c    *BoundedLocalCache
+	node *Node
+}
+
+func (t *ReadTask) run() {
+	t.c.onAccess(t.node)
 }
 
 // AddTask is a async task used for add new kv to LocalCache
@@ -18,13 +27,16 @@ type AddTask struct {
 	weight int
 }
 
+// AddTask update node's the weight and frequency
 func (a *AddTask) run() {
 	c := a.c
 	if !c.EnableEvict() {
 		return
 	}
-	weightedSize := c.weightedSize
-	c.weightedSize = weightedSize + a.weight
+	// update cache size
+	c.weightedSize += a.weight
+	// update window deque size
+	c.windowWeightedSize += a.weight
 
 	node := a.node
 	if len(node.Key) != 0 {
@@ -40,6 +52,7 @@ type UpdateTask struct {
 	weightDiff int
 }
 
+// UpdateTask update the node's frequency and location
 func (t *UpdateTask) run() {
 	c := t.c
 	if !c.EnableEvict() {
@@ -50,9 +63,11 @@ func (t *UpdateTask) run() {
 		c.windowWeightedSize = c.windowWeightedSize + t.weightDiff
 	} else if node.inMainProtected() {
 		c.mainProtectedWeightedSize = c.mainProtectedWeightedSize + t.weightDiff
+	} else if node.inMainProbation() {
+		// will move to protected deque
+		// do nothing
 	}
-	//nodePtr := unsafe.Pointer(￿node)
-	c.onAccess(nil)
+	c.onAccess(node)
 }
 
 type DeleteTask struct {
@@ -60,6 +75,7 @@ type DeleteTask struct {
 	node *Node
 }
 
+// DeleteTask remove the node from deque
 func (a *DeleteTask) run() {
 	c := a.c
 	if !c.EnableEvict() {
@@ -68,9 +84,11 @@ func (a *DeleteTask) run() {
 	node := a.node
 	if node.inWindow() {
 		c.accessOrderWindowDeque().Remove(node)
+		c.windowWeightedSize -= node.weight
 	} else if node.inMainProbation() {
 		c.accessOrderProbationDeque().Remove(node)
 	} else {
 		c.accessOrderProtectedDeque().Remove(node)
+		c.mainProtectedWeightedSize -= node.weight
 	}
 }

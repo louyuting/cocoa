@@ -2,19 +2,26 @@ package cocoa
 
 import "sync"
 
-type ConcurrentMap interface {
-	Put(key []byte, value interface{})
-
-	PutIfAbsent(key []byte, value interface{}) (prior interface{})
-
-	Get(key []byte) (value interface{}, existed bool)
-
-	Remove(key []byte) (existed bool)
-
-	Contains(key []byte) (ok bool)
-
-	Len() int
-}
+//type computeValue func(key []byte) *Node
+//
+//type ConcurrentMap interface {
+//	Put(key []byte, value *Node)
+//
+//	PutIfAbsent(key []byte, value *Node) (prior *Node)
+//
+//	// ComputeIfAbsent attempts to compute its value using the given mapping function and enters it into this map
+//	// If the specified key is not already associated with a value.
+//	// return the current (existing or computed) value associated with the specified key, or null if the computed value is null
+//	ComputeIfAbsent(key []byte, compute computeValue) *Node
+//
+//	Get(key []byte) (value *Node, existed bool)
+//
+//	Remove(key []byte) (existed bool)
+//
+//	Contains(key []byte) (ok bool)
+//
+//	Len() int
+//}
 
 const SegmentCount = 64
 
@@ -25,14 +32,14 @@ type SegmentHashMap struct {
 	mask int
 }
 
-func newSegmentHashMap(size int) *SegmentHashMap {
+func newSegmentHashMap() *SegmentHashMap {
 	m := &SegmentHashMap{
 		table: make([]*Segment, SegmentCount, SegmentCount),
 		mask:  SegmentCount - 1,
 	}
 	for i := 0; i < SegmentCount; i++ {
 		m.table[i] = &Segment{
-			data: make(map[string]interface{}),
+			data: make(map[string]*Node),
 			mux:  sync.RWMutex{},
 		}
 	}
@@ -51,30 +58,30 @@ func (m *SegmentHashMap) getSegment(hash int) *Segment {
 	return m.table[hash&m.mask]
 }
 
-func (m *SegmentHashMap) Put(key []byte, value interface{}) {
+func (m *SegmentHashMap) Put(key []byte, value *Node) (prior *Node) {
 	if len(key) == 0 {
-		return
+		return nil
 	}
-	m.getSegment(m.hash(key)).Put(key, value)
+	return m.getSegment(m.hash(key)).Put(key, value)
 }
 
-func (m *SegmentHashMap) PutIfAbsent(key []byte, value interface{}) (prior interface{}) {
+func (m *SegmentHashMap) PutIfAbsent(key []byte, value *Node) (prior *Node) {
 	if len(key) == 0 {
 		return
 	}
 	return m.getSegment(m.hash(key)).PutIfAbsent(key, value)
 }
 
-func (m *SegmentHashMap) Get(key []byte) (value interface{}, existed bool) {
+func (m *SegmentHashMap) Get(key []byte) (value *Node, existed bool) {
 	if len(key) == 0 {
 		return nil, false
 	}
 	return m.getSegment(m.hash(key)).Get(key)
 }
 
-func (m *SegmentHashMap) Remove(key []byte) (existed bool) {
+func (m *SegmentHashMap) Remove(key []byte) (prior *Node) {
 	if len(key) == 0 {
-		return false
+		return nil
 	}
 	return m.getSegment(m.hash(key)).Remove(key)
 }
@@ -95,22 +102,28 @@ func (m *SegmentHashMap) Len() int {
 }
 
 type Segment struct {
-	data map[string]interface{}
+	data map[string]*Node
 	mux  sync.RWMutex
 }
 
-func (s *Segment) Put(key []byte, value interface{}) {
-	if key == nil || value == nil {
-		return
+func (s *Segment) PutOnlyUpdate(key []byte, newNode *Node) (prior *Node) {
+	if key == nil || newNode == nil {
+		panic("key or node is nil")
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.data[*bytesToString(key)] = value
+	priorNode, existed := s.data[*bytesToString(key)]
+	if existed {
+		priorNode.Value = newNode.Value
+		return priorNode
+	} else {
+		return nil
+	}
 }
 
-func (s *Segment) PutIfAbsent(key []byte, value interface{}) (prior interface{}) {
+func (s *Segment) PutIfAbsent(key []byte, value *Node) (prior *Node) {
 	if key == nil || value == nil {
-		return
+		panic("key or value is nil")
 	}
 	s.mux.RLock()
 	prior, existed := s.data[*bytesToString(key)]
@@ -129,9 +142,9 @@ func (s *Segment) PutIfAbsent(key []byte, value interface{}) (prior interface{})
 	return nil
 }
 
-func (s *Segment) Get(key []byte) (value interface{}, existed bool) {
+func (s *Segment) Get(key []byte) (value *Node, existed bool) {
 	if key == nil {
-		return nil, false
+		panic("key is nil")
 	}
 	s.mux.RLock()
 	defer s.mux.RUnlock()
@@ -139,14 +152,14 @@ func (s *Segment) Get(key []byte) (value interface{}, existed bool) {
 	return
 }
 
-func (s *Segment) Remove(key []byte) (existed bool) {
+func (s *Segment) Remove(key []byte) (prior *Node) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	_, existed = s.data[*bytesToString(key)]
+	priorNode, existed := s.data[*bytesToString(key)]
 	if existed {
 		delete(s.data, *bytesToString(key))
 	}
-	return
+	return priorNode
 }
 
 func (s *Segment) Contains(key []byte) (ok bool) {

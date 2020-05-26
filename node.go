@@ -16,6 +16,10 @@ type Node struct {
 	queueIn    QueueType
 }
 
+func (n *Node) makeIn(newQueueType QueueType) {
+	n.queueIn = newQueueType
+}
+
 func (n *Node) inWindow() bool {
 	return n.queueIn == Window
 }

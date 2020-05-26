@@ -22,7 +22,7 @@ const (
 	failed               = 2
 )
 
-type elemConsumer func(p unsafe.Pointer)
+type elemConsumer func(t unsafe.Pointer)
 
 type ringBuffer struct {
 	buf *atomicArray

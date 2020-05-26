@@ -31,7 +31,9 @@ type OrderDeque interface {
 }
 
 type AccessOrderDeque struct {
+	// the oldest node to remove next.
 	head *Node
+	// the most frequency node
 	tail *Node
 }
 

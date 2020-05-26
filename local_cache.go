@@ -6,24 +6,30 @@ import (
 	"unsafe"
 )
 
-type LocalCache interface {
-	EnableEvict() bool
-
-	Put(key []byte, value interface{})
-
-	PutIfAbsent(key []byte, value interface{}) (prior interface{})
-
-	Get(key []byte) (value interface{})
-
-	Delete(key []byte)
-
-	Contains(key []byte) (ok bool)
-
-	Size() int
-}
+//type LocalCache interface {
+//	EnableEvict() bool
+//
+//	Put(key []byte, value interface{})
+//
+//	PutIfAbsent(key []byte, value interface{}) (prior interface{})
+//
+//	Get(key []byte) (value interface{})
+//
+//	Delete(key []byte)
+//
+//	Contains(key []byte) (ok bool)
+//
+//	Size() int
+//}
 
 type DrainStatus int32
 
+/**
+
+
+
+
+ */
 const (
 	Idle                 DrainStatus = iota
 	Required                         = 1
@@ -65,25 +71,28 @@ const (
 )
 
 type BoundedLocalCache struct {
-	data ConcurrentMap
+	data *SegmentHashMap
 
 	windowDeque    *AccessOrderDeque
 	probationDeque *AccessOrderDeque
 	protectedDeque *AccessOrderDeque
 
+	// the cache weighted size
 	weightedSize int
 	maximum      int
 
+	// the window deque weighted size
 	windowWeightedSize int
 	windowMaximum      int
 
-	mainProtectedMaximum      int
+	// the protected deque weighted size
 	mainProtectedWeightedSize int
+	mainProtectedMaximum      int
 
 	readBuffer  *ringBuffer
 	writeBuffer *ringBuffer
 
-	evictable AtomicBool
+	enableEvict AtomicBool
 
 	sketch *FrequencySketch
 	//
@@ -93,53 +102,76 @@ type BoundedLocalCache struct {
 
 // enableEvict returns if the cache evicts entries due to a maximum size or weight threshold.
 func (c *BoundedLocalCache) EnableEvict() bool {
-	return c.evictable.Get()
+	return c.enableEvict.Get()
 }
 
 func (c *BoundedLocalCache) Put(key []byte, value interface{}) {
-	c.PutIfAbsent(key, value)
-}
-
-func (c *BoundedLocalCache) PutIfAbsent(key []byte, value interface{}) (prior interface{}) {
-	prior = c.data.PutIfAbsent(key, value)
-	if prior == nil {
-		// absent, so add kv to cache
+	if len(key) == 0 {
+		return
+	}
+	seg := c.data.getSegment(c.data.hash(key))
+	seg.mux.Lock()
+	priorNode, existed := seg.data[*bytesToString(key)]
+	if !existed {
+		node := &Node{
+			Key:     key,
+			Value:   value,
+			weight:  1,
+			prev:    nil,
+			next:    nil,
+			queueIn: Window,
+		}
+		seg.data[*bytesToString(key)] = node
+		seg.mux.Unlock()
 		c.afterWrite(&AddTask{
-			c: c,
-			node: &Node{
-				Key:     key,
-				Value:   value,
-				weight:  1,
-				prev:    nil,
-				next:    nil,
-				queueIn: Window,
-			},
+			c:      c,
+			node:   node,
 			weight: 1,
 		})
 	} else {
-		// present, so update the kv to cache
+		priorNode.Value = value
+		seg.mux.Unlock()
 		c.afterWrite(&UpdateTask{
-			c: c,
-			node: &Node{
-				Key:     key,
-				Value:   value,
-				weight:  1,
-				prev:    nil,
-				next:    nil,
-				queueIn: Window,
-			},
+			c:          c,
+			node:       priorNode,
 			weightDiff: 0,
 		})
 	}
-	return prior
+}
+
+// PutIfAbsent put the key/value into cache if key don't exist in cache before;
+// else return the prior value and do nothing
+func (c *BoundedLocalCache) PutIfAbsent(key []byte, value interface{}) interface{} {
+	if len(key) == 0 {
+		panic("key is empty.")
+	}
+	seg := c.data.getSegment(c.data.hash(key))
+	seg.mux.Lock()
+	priorNode, existed := seg.data[*bytesToString(key)]
+	if !existed {
+		node := &Node{
+			Key:     key,
+			Value:   value,
+			weight:  1,
+			prev:    nil,
+			next:    nil,
+			queueIn: Window,
+		}
+		seg.data[*bytesToString(key)] = node
+		seg.mux.Unlock()
+		c.afterWrite(&AddTask{
+			c:      c,
+			node:   node,
+			weight: 1,
+		})
+		return nil
+	} else {
+		return priorNode
+	}
 }
 
 func (c *BoundedLocalCache) Get(key []byte) (value interface{}) {
-	val, existed := c.data.Get(key)
-	if !existed {
-		return nil
-	}
-	node, existed := val.(*Node)
+	node, existed := c.data.Get(key)
 	if !existed {
 		return nil
 	}
@@ -147,22 +179,16 @@ func (c *BoundedLocalCache) Get(key []byte) (value interface{}) {
 	return node.Value
 }
 
-func (c *BoundedLocalCache) Delete(key []byte) {
-	existed := c.data.Remove(key)
-	if !existed {
-		return
+func (c *BoundedLocalCache) Delete(key []byte) interface{} {
+	prior := c.data.Remove(key)
+	if prior == nil {
+		return nil
 	}
 	c.afterWrite(&DeleteTask{
-		c: c,
-		node: &Node{
-			Key:     key,
-			Value:   nil,
-			weight:  1,
-			prev:    nil,
-			next:    nil,
-			queueIn: Window,
-		},
+		c:    c,
+		node: prior,
 	})
+	return prior.Value
 }
 
 func (c *BoundedLocalCache) Contains(key []byte) (ok bool) {
@@ -187,6 +213,8 @@ func (c *BoundedLocalCache) performCleanUp(t task) {
 func (c *BoundedLocalCache) maintenance() {
 	c.drainStatus.set(ProcessingToIdle)
 	defer func() {
+		// 1. after eviction, the status is not ProcessingToIdle, so need to continue drain buffer, mark as Required
+		// 2. after eviction, the status is ProcessingToIdle, fail to cas update status to Idle, so need to continue drain buffer, mark as Required
 		if (c.drainStatus.get() != ProcessingToIdle) || !c.drainStatus.casDrainStatus(ProcessingToIdle, Idle) {
 			c.drainStatus.set(Required)
 		}
@@ -204,7 +232,6 @@ func (c *BoundedLocalCache) drainReadBuffer() {
 
 func (c *BoundedLocalCache) drainWriteBuffer() {
 	c.writeBuffer.drainTo(c.onWrite)
-	c.drainStatus.set(ProcessingToRequired)
 }
 
 func (c *BoundedLocalCache) evictEntries() {
@@ -354,8 +381,32 @@ func (c *BoundedLocalCache) admit(candidateKey []byte, victimKey []byte) bool {
 	return (random & 127) == 0
 }
 
+// onAccess updates the node's location in the page replacement policy
 func (c *BoundedLocalCache) onAccess(p unsafe.Pointer) {
-	panic("implement me")
+	if p == nil {
+		return
+	}
+	n := (*Node)(p)
+	if !c.EnableEvict() {
+		return
+	}
+	key := n.Key
+	if len(key) == 0 {
+		return
+	}
+	c.sketch.increment(key)
+
+	// update location
+	if n.inWindow() && c.windowDeque.Contains(n) {
+		c.windowDeque.MoveToBack(n)
+	} else if n.inMainProbation() && c.probationDeque.Contains(n) {
+		c.mainProtectedWeightedSize += n.weight
+		c.probationDeque.Remove(n)
+		c.protectedDeque.PushBack(n)
+		n.makeIn(Protected)
+	} else if n.inMainProtected() && c.protectedDeque.Contains(n) {
+		c.protectedDeque.MoveToBack(n)
+	}
 }
 
 func (c *BoundedLocalCache) onWrite(p unsafe.Pointer) {
@@ -413,7 +464,7 @@ func (c *BoundedLocalCache) shouldDrainBuffers(delayable bool) bool {
 	case ProcessingToRequired:
 		return false
 	default:
-		panic("implement me")
+		panic("illegal drain status.")
 	}
 }
 
@@ -436,7 +487,7 @@ func (c *BoundedLocalCache) scheduleAfterWrite() {
 		case ProcessingToRequired:
 			return
 		default:
-			panic("implement me")
+			panic("illegal drain status.")
 		}
 	}
 }
