@@ -22,8 +22,10 @@ const (
 	failed               = 2
 )
 
-type elemConsumer func(t unsafe.Pointer)
-
+// ringBuffer is the multi producer and one consumer buffer.
+// ringBuffer is a lock-free fixed-size multi-producer,
+// single-consumer queue. The multi producers can offer from the tail.
+// and single consumer can poll from the head.
 type ringBuffer struct {
 	buf *atomicArray
 	r   uint32
@@ -58,9 +60,35 @@ func (r *ringBuffer) offer(n unsafe.Pointer) bufferStatus {
 	return failed
 }
 
+// poll removes and returns the element at the head of buffer. It returns nil if the
+// queue is empty. It must only be called by a single consumer.
+func (r *ringBuffer) poll() task {
+	// read index
+	head := atomic.LoadUint32(&r.r)
+	// write index
+	tail := atomic.LoadUint32(&r.w)
+	size := tail - head
+	if size == 0 {
+		return nil
+	}
+	idx := int(head & spaceMask)
+	e := r.buf.get(idx)
+	if e == nil {
+		// not published yet
+		return nil
+	}
+	r.buf.set(idx, nil)
+	tPtr := (*task)(e)
+	t := *tPtr
+	//t.run()
+	head += offset
+	atomic.StoreUint32(&r.r, head)
+	return t
+}
+
 // Drains the buffer, sending each element to the consumer for processing.
 // The caller must ensure that a consumer has exclusive read access to the buffer.
-func (r *ringBuffer) drainTo(consumer elemConsumer) {
+func (r *ringBuffer) drainBuf() {
 	// read index
 	head := atomic.LoadUint32(&r.r)
 	// write index
@@ -78,7 +106,9 @@ func (r *ringBuffer) drainTo(consumer elemConsumer) {
 			break
 		}
 		r.buf.set(idx, nil)
-		consumer(e)
+		tPtr := (*task)(e)
+		t := *tPtr
+		t.run()
 		head += offset
 	}
 	atomic.StoreUint32(&r.r, head)

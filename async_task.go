@@ -28,17 +28,17 @@ type AddTask struct {
 }
 
 // AddTask update node's the weight and frequency
-func (a *AddTask) run() {
-	c := a.c
+func (t *AddTask) run() {
+	c := t.c
 	if !c.EnableEvict() {
 		return
 	}
 	// update cache size
-	c.weightedSize += a.weight
+	c.weightedSize += t.weight
 	// update window deque size
-	c.windowWeightedSize += a.weight
+	c.windowWeightedSize += t.weight
 
-	node := a.node
+	node := t.node
 	if len(node.Key) != 0 {
 		c.sketch.increment(node.Key)
 	}
@@ -76,12 +76,12 @@ type DeleteTask struct {
 }
 
 // DeleteTask remove the node from deque
-func (a *DeleteTask) run() {
-	c := a.c
+func (t *DeleteTask) run() {
+	c := t.c
 	if !c.EnableEvict() {
 		return
 	}
-	node := a.node
+	node := t.node
 	if node.inWindow() {
 		c.accessOrderWindowDeque().Remove(node)
 		c.windowWeightedSize -= node.weight

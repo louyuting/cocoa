@@ -2,6 +2,7 @@ package cocoa
 
 import (
 	"math/rand"
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 )
@@ -22,7 +23,7 @@ import (
 //	Size() int
 //}
 
-type DrainStatus int32
+type DrainState int32
 
 /**
 
@@ -31,27 +32,27 @@ type DrainStatus int32
 
  */
 const (
-	Idle                 DrainStatus = iota
-	Required                         = 1
-	ProcessingToIdle                 = 2
-	ProcessingToRequired             = 3
+	Idle                 DrainState = iota
+	Required                        = 1
+	ProcessingToIdle                = 2
+	ProcessingToRequired            = 3
 )
 
-func (s *DrainStatus) get() DrainStatus {
-	statusPtr := (*int32)(unsafe.Pointer(s))
-	return DrainStatus(atomic.LoadInt32(statusPtr))
+func (s *DrainState) get() DrainState {
+	statePtr := (*int32)(unsafe.Pointer(s))
+	return DrainState(atomic.LoadInt32(statePtr))
 }
-func (s *DrainStatus) set(status DrainStatus) {
-	statusPtr := (*int32)(unsafe.Pointer(s))
-	newStatus := int32(status)
-	atomic.StoreInt32(statusPtr, newStatus)
+func (s *DrainState) set(state DrainState) {
+	statePtr := (*int32)(unsafe.Pointer(s))
+	newState := int32(state)
+	atomic.StoreInt32(statePtr, newState)
 }
 
-func (s *DrainStatus) casDrainStatus(expect DrainStatus, update DrainStatus) bool {
-	statusPtr := (*int32)(unsafe.Pointer(s))
-	oldStatus := int32(expect)
-	newStatus := int32(update)
-	return atomic.CompareAndSwapInt32(statusPtr, oldStatus, newStatus)
+func (s *DrainState) casDrainStatus(expect DrainState, update DrainState) bool {
+	statePtr := (*int32)(unsafe.Pointer(s))
+	oldState := int32(expect)
+	newState := int32(update)
+	return atomic.CompareAndSwapInt32(statePtr, oldState, newState)
 }
 
 type PerformCleanupTask struct {
@@ -65,11 +66,20 @@ func (t *PerformCleanupTask) run() {
 	t.cache.maintenance()
 }
 
+var (
+	// The maximum capacity of the write buffer.
+	WriteBufferMaxCapacity = 128 * ceilingPowerOfTwo(runtime.NumCPU())
+)
+
 const (
 	//The number of attempts to insert into the write buffer before yielding.
 	WriteBufferRetries = 100
 )
 
+// BoundedLocalCache is the local bounded cache. the eviction strategy supports
+// 1. size-based eviction
+//
+//
 type BoundedLocalCache struct {
 	data *SegmentHashMap
 
@@ -97,7 +107,7 @@ type BoundedLocalCache struct {
 	sketch *FrequencySketch
 	//
 	evictExecChan chan PerformCleanupTask
-	drainStatus   *DrainStatus
+	drainState    *DrainState
 }
 
 // enableEvict returns if the cache evicts entries due to a maximum size or weight threshold.
@@ -211,12 +221,12 @@ func (c *BoundedLocalCache) performCleanUp(t task) {
 // excess scheduling attempts. The read buffer and write buffer are drained,
 // followed by expiration, and size-based eviction.
 func (c *BoundedLocalCache) maintenance() {
-	c.drainStatus.set(ProcessingToIdle)
+	c.drainState.set(ProcessingToIdle)
 	defer func() {
 		// 1. after eviction, the status is not ProcessingToIdle, so need to continue drain buffer, mark as Required
 		// 2. after eviction, the status is ProcessingToIdle, fail to cas update status to Idle, so need to continue drain buffer, mark as Required
-		if (c.drainStatus.get() != ProcessingToIdle) || !c.drainStatus.casDrainStatus(ProcessingToIdle, Idle) {
-			c.drainStatus.set(Required)
+		if (c.drainState.get() != ProcessingToIdle) || !c.drainState.casDrainStatus(ProcessingToIdle, Idle) {
+			c.drainState.set(Required)
 		}
 	}()
 
@@ -227,11 +237,20 @@ func (c *BoundedLocalCache) maintenance() {
 }
 
 func (c *BoundedLocalCache) drainReadBuffer() {
-	c.readBuffer.drainTo(c.onAccess)
+	c.readBuffer.drainBuf()
 }
 
 func (c *BoundedLocalCache) drainWriteBuffer() {
-	c.writeBuffer.drainTo(c.onWrite)
+	for i := 0; i < WriteBufferMaxCapacity; i++ {
+		t := c.writeBuffer.poll()
+		if t == nil {
+			return
+		}
+		t.run()
+	}
+	// the write buffer has not been drained,
+	// the state machine of drainState is switched to the ProcessingToRequired
+	c.drainState.set(ProcessingToRequired)
 }
 
 func (c *BoundedLocalCache) evictEntries() {
@@ -382,11 +401,10 @@ func (c *BoundedLocalCache) admit(candidateKey []byte, victimKey []byte) bool {
 }
 
 // onAccess updates the node's location in the page replacement policy
-func (c *BoundedLocalCache) onAccess(p unsafe.Pointer) {
-	if p == nil {
+func (c *BoundedLocalCache) onAccess(n *Node) {
+	if n == nil {
 		return
 	}
-	n := (*Node)(p)
 	if !c.EnableEvict() {
 		return
 	}
@@ -454,7 +472,7 @@ func (c *BoundedLocalCache) afterWrite(t task) {
 }
 
 func (c *BoundedLocalCache) shouldDrainBuffers(delayable bool) bool {
-	switch c.drainStatus.get() {
+	switch c.drainState.get() {
 	case Idle:
 		return !delayable
 	case Required:
@@ -469,7 +487,7 @@ func (c *BoundedLocalCache) shouldDrainBuffers(delayable bool) bool {
 }
 
 func (c *BoundedLocalCache) scheduleAfterWrite() {
-	status := c.drainStatus
+	status := c.drainState
 	for {
 		switch status.get() {
 		case Idle:
@@ -493,7 +511,7 @@ func (c *BoundedLocalCache) scheduleAfterWrite() {
 }
 
 func (c *BoundedLocalCache) scheduleDrainBuffers() {
-	status := c.drainStatus.get()
+	status := c.drainState.get()
 	if status >= ProcessingToIdle {
 		// processing, return directly.
 		return
@@ -509,7 +527,7 @@ func (c *BoundedLocalCache) asyncCleanUp() {
 	for {
 		task := <-c.evictExecChan
 		task.run()
-		if c.drainStatus.get() == Required {
+		if c.drainState.get() == Required {
 			c.scheduleDrainBuffers()
 		}
 	}
