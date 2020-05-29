@@ -47,8 +47,8 @@ func ceilingPowerOfTwo(s int) int {
 	return n + 1
 }
 
+// the number of one-bits in the two's complement binary representation of the specified value.
 func bitCount(i uint64) int {
-	// HD, Figure 5-14
 	i = i - ((i >> 1) & 0x5555555555555555)
 	i = (i & 0x3333333333333333) + ((i >> 2) & 0x3333333333333333)
 	i = (i + (i >> 4)) & 0x0f0f0f0f0f0f0f0f

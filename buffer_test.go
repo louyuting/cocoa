@@ -23,7 +23,7 @@ func Test_RingBuffer(t *testing.T) {
 			}))
 		}
 		assert.True(t, buf.offer(unsafe.Pointer(&Test{name: "louyuting", age: 18})) == full)
-		buf.drainTo(testElemConsumer)
+		buf.drainBuf()
 
 		assert.True(t, buf.r == 256 && buf.w == 256)
 	})

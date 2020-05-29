@@ -129,7 +129,7 @@ func (c *BoundedLocalCache) Put(key []byte, value interface{}) {
 			weight:  1,
 			prev:    nil,
 			next:    nil,
-			queueIn: Window,
+			dequeIn: Window,
 		}
 		seg.data[*bytesToString(key)] = node
 		seg.mux.Unlock()
@@ -165,7 +165,7 @@ func (c *BoundedLocalCache) PutIfAbsent(key []byte, value interface{}) interface
 			weight:  1,
 			prev:    nil,
 			next:    nil,
-			queueIn: Window,
+			dequeIn: Window,
 		}
 		seg.data[*bytesToString(key)] = node
 		seg.mux.Unlock()
@@ -257,21 +257,24 @@ func (c *BoundedLocalCache) evictEntries() {
 	if !c.EnableEvict() {
 		return
 	}
-	candidates := c.evictFromWindow()
-	c.evictFromMain(candidates)
+	candidateNum := c.evictFromWindow()
+	c.evictFromMain(candidateNum)
 }
 
 //  Attempts to evict the entry. A removal due to size may be ignored if the entry was updated and is no longer eligible for eviction.
 func (c *BoundedLocalCache) evictEntry(node *Node) {
-	if node == nil || len(node.Key) == 0 {
+	if node == nil || len(node.Key) == 0 || !c.EnableEvict() {
 		return
 	}
 	c.data.Remove(node.Key)
+	c.weightedSize -= node.weight
 	if node.inWindow() {
+		c.windowWeightedSize -= node.weight
 		c.windowDeque.Remove(node)
 	} else if node.inMainProbation() {
 		c.probationDeque.Remove(node)
 	} else {
+		c.mainProtectedWeightedSize -= node.weight
 		c.protectedDeque.Remove(node)
 	}
 	return
@@ -280,7 +283,7 @@ func (c *BoundedLocalCache) evictEntry(node *Node) {
 // Evicts entries from the window space into the main space while the window size exceeds a maximum.
 // return the number of candidate entries evicted from the window space
 func (c *BoundedLocalCache) evictFromWindow() int {
-	candidates := 0
+	candidateNum := 0
 	node := c.accessOrderWindowDeque().GetFront()
 	for c.windowWeightedSize > c.windowMaximum {
 		if node == nil {
@@ -289,17 +292,17 @@ func (c *BoundedLocalCache) evictFromWindow() int {
 		next := node.next
 		c.accessOrderWindowDeque().Remove(node)
 		c.accessOrderProbationDeque().PushBack(node)
-		candidates++
+		candidateNum++
 		c.windowWeightedSize = c.windowWeightedSize - node.weight
 		node = next
 	}
-	return candidates
+	return candidateNum
 }
 
-//	Evicts entries from the main space if the cache exceeds the maximum capacity. The main space
-//  determines whether admitting an entry (coming from the window space) is preferable to retaining
-//  the eviction policy's victim. This is decision is made using a frequency filter so that the
-//  least frequently used entry is removed.
+// Evicts entries from the main space if the cache exceeds the maximum capacity. The main space
+// determines whether admitting an entry (coming from the window space) is preferable to retaining
+// the eviction policy's victim. This is decision is made using a frequency filter so that the
+// least frequently used entry is removed.
 //
 // The window space candidates were previously placed in the MRU position and the eviction
 // policy's victim is at the LRU position. The two ends of the queue are evaluated while an
@@ -311,21 +314,24 @@ func (c *BoundedLocalCache) evictFromMain(candidates int) {
 	candidate := c.accessOrderProbationDeque().GetBack()
 
 	for c.weightedSize > c.maximum {
-		// Stop trying to evict candidates and always prefer the victim
+		// Stop trying to evict candidates from window deque and always prefer the victim
 		if candidates == 0 {
 			candidate = nil
 		}
 		// Try evicting from the protected and window queues
 		if candidate == nil && victim == nil {
+			// Probation deque is empty now, try to evict from Protected deque
 			if victimQueue == Probation {
 				victim = c.accessOrderProtectedDeque().GetFront()
 				victimQueue = Protected
 				continue
 			} else if victimQueue == Protected {
+				// Both Probation deque and Protected deque are empty, try to evict from Window deque
 				victim = c.accessOrderWindowDeque().GetFront()
 				victimQueue = Window
 				continue
 			}
+			// The pending operations will adjust the size to reflect the correct weight
 			break
 		}
 
@@ -338,6 +344,7 @@ func (c *BoundedLocalCache) evictFromMain(candidates int) {
 			c.evictEntry(evict)
 			continue
 		} else if candidate == nil {
+			// candidate is nil, always prefer to evict victim from Probation or Protected
 			evict := victim
 			victim = victim.next
 			c.evictEntry(evict)
@@ -366,6 +373,7 @@ func (c *BoundedLocalCache) evictFromMain(candidates int) {
 			c.evictEntry(evict)
 			continue
 		}
+
 		// Evict the entry with the lowest frequency
 		candidates--
 		if c.admit(candidateKey, victimKey) {
@@ -386,7 +394,7 @@ func (c *BoundedLocalCache) evictFromMain(candidates int) {
 // frequency relative to the victim. A small amount of randomness is used to protect against hash
 // collision attacks, where the victim's frequency is artificially raised so that no new entries
 // are admitted.
-// return if the candidate should be admitted and the victim ejected
+// return if the candidate should be admitted and the victim rejected
 func (c *BoundedLocalCache) admit(candidateKey []byte, victimKey []byte) bool {
 	candidateFreq := c.sketch.frequency(candidateKey)
 	victimFreq := c.sketch.frequency(victimKey)

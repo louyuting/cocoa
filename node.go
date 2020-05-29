@@ -13,21 +13,21 @@ type Node struct {
 	Value      interface{}
 	weight     int
 	prev, next *Node
-	queueIn    QueueType
+	dequeIn    QueueType
 }
 
 func (n *Node) makeIn(newQueueType QueueType) {
-	n.queueIn = newQueueType
+	n.dequeIn = newQueueType
 }
 
 func (n *Node) inWindow() bool {
-	return n.queueIn == Window
+	return n.dequeIn == Window
 }
 
 func (n *Node) inMainProbation() bool {
-	return n.queueIn == Probation
+	return n.dequeIn == Probation
 }
 
 func (n *Node) inMainProtected() bool {
-	return n.queueIn == Protected
+	return n.dequeIn == Protected
 }
